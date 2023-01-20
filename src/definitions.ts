@@ -10,7 +10,11 @@ export interface BackgroundServicePlugin {
    * Stop geolocation
    */
   stop():void;
-  
+  /**
+   * Is geolocation running?
+
+  isStarted(): boolean;
+   */
   /**
    * Called when the device receives a push notification.
    */

@@ -1,15 +1,19 @@
 package com.lagruva.backgroundservice;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.location.Location;
 import android.os.Binder;
 import android.os.Build;
 import android.os.IBinder;
+import android.preference.PreferenceManager;
 import android.util.Log;
 
 import com.getcapacitor.JSObject;
@@ -21,7 +25,9 @@ import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
+
 import androidx.annotation.Nullable;
+import androidx.core.app.ActivityCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.getcapacitor.Logger;
@@ -32,11 +38,11 @@ import org.json.JSONObject;
 public class GeolocationService extends Service {
     public int ONGOING_NOTIFICATION_ID = 9876543;
     private final IBinder binder = new LocalBinder();
-    protected boolean started = false;
+    protected static boolean started;
     protected Notification.Builder notification;
     private FusedLocationProviderClient client;
-    private static LocationCallback callback;
-    public static Context context;
+    private LocationCallback callback;
+    private String partnerId;
     static final String ACTION_BROADCAST = (
             GeolocationService.class.getPackage().getName() + ".broadcast"
     );
@@ -44,46 +50,82 @@ public class GeolocationService extends Service {
             GeolocationService.class.getPackage().getName() + ".location"
     );
 
+    public GeolocationService() {
+        Logger.debug("BackgroundService.Geo", "Freaking constructor " + started);
+    }
+
     @Override
     public void onCreate() {
+
         super.onCreate();
-        context = getApplicationContext();
-        Logger.debug("BackgroundService.Geo", "context set: " + context);
-        //start();
+        Logger.debug("BackgroundService.Geo", "onCreate");
     }
 
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
+        Logger.debug("BackgroundService.Geo", "onBind" + intent);
         return binder;
     }
 
     public void updateSubText(String subtext) {
+        if (notification == null) {
+            return;
+        }
         Notification updated = notification.setSubText(subtext).build();
         NotificationManager manager = (NotificationManager) getSystemService(
                 Context.NOTIFICATION_SERVICE
         );
-        manager.notify(ONGOING_NOTIFICATION_ID,updated);
+        manager.notify(ONGOING_NOTIFICATION_ID, updated);
     }
+
     public void start() {
         if (notification == null) {
             setupNotification();
         }
         Logger.debug("BackgroundService.Geo", "to foreground. callback=" + callback);
-        // Notification ID cannot be 0.
         updateSubText("En servicio");
 
         startForeground(ONGOING_NOTIFICATION_ID, notification.build());
-        if ( callback == null)  {
+        if (callback == null) {
             locationWatch();
         }
-        started = true;
+        GeolocationService.started = true;
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        Logger.debug("BackgroundService.Geo", "onStartCommand");
+        start();
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        Logger.debug("BackgroundService.Geo", "destroy");
+        if (callback != null) {
+            getClient().removeLocationUpdates(callback);
+            Logger.debug("BackgroundService.Geo", "callback removed");
+            callback = null;
+        }
+        if (notification != null) {
+            // updateSubText("Stopped");
+            Notification updated = notification.setSubText("Detenido").setOngoing(false).build();
+            NotificationManager manager = (NotificationManager) getSystemService(
+                    Context.NOTIFICATION_SERVICE
+            );
+            manager.notify(ONGOING_NOTIFICATION_ID, updated);
+        }
+
+        stopForeground(true);
+        super.onDestroy();
+
     }
 
     public void stop() {
         Logger.debug("BackgroundService.Geo", "to background");
-        if (client != null && callback != null)  {
-            client.removeLocationUpdates(callback);
+        if (callback != null) {
+            getClient().removeLocationUpdates(callback);
             callback = null;
         }
         updateSubText("Background");
@@ -92,10 +134,10 @@ public class GeolocationService extends Service {
     }
 
     private void setupNotification() {
-        Context context = getApplicationContext();
-        int resId = AssetUtil.getResourceID(context,"notificacion_lagruva","drawable");
+
+        int resId = AssetUtil.getResourceID(this, "notificacion_lagruva", "drawable");
         Logger.debug("BackgroundService.Geo", "notification icon : " + resId);
-        Notification.Builder builder = new Notification.Builder(context)
+        Notification.Builder builder = new Notification.Builder(this)
                 .setContentTitle("Registrando tu ubicación")
                 .setContentText("Presione para ir a la aplicación")
                 .setSmallIcon(resId)
@@ -103,15 +145,15 @@ public class GeolocationService extends Service {
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setWhen(System.currentTimeMillis());
 
-        Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(
-                context.getPackageName()
+        Intent launchIntent = this.getPackageManager().getLaunchIntentForPackage(
+                this.getPackageName()
         );
         if (launchIntent != null) {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
             Logger.debug("BackgroundService.Geo", "Launch intent service: " + launchIntent);
             builder.setContentIntent(
                     PendingIntent.getActivity(
-                            context,
+                            this,
                             0,
                             launchIntent,
                             PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE
@@ -127,14 +169,17 @@ public class GeolocationService extends Service {
 
     }
 
-    private void locationWatch() {
-        int distanceFilter = 10;
+    private FusedLocationProviderClient getClient() {
         if (client == null) {
-            client = LocationServices.getFusedLocationProviderClient(
-                    getApplicationContext()
-            );
+            client = LocationServices.getFusedLocationProviderClient(this);
             Logger.debug("BackgroundService.Geo", "created new client");
         }
+        return client;
+    }
+
+    private void locationWatch() {
+        int distanceFilter = 10;
+
         LocationRequest locationRequest = new LocationRequest();
         locationRequest.setMaxWaitTime(2000);
         locationRequest.setInterval(10000);
@@ -142,8 +187,8 @@ public class GeolocationService extends Service {
         locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
         locationRequest.setSmallestDisplacement(distanceFilter);
 
-        LocationCallback callback = new LocationCallback(){
-//        callback = new LocationCallback(){
+        LocationCallback callback = new LocationCallback() {
+            //        callback = new LocationCallback(){
             @Override
             public void onLocationResult(LocationResult locationResult) {
                 Logger.debug("BackgroundService.Geo", "onLocationResult: " + locationResult);
@@ -153,9 +198,11 @@ public class GeolocationService extends Service {
                 intent.putExtra("location", location);
                 intent.putExtra("id", "Lagruva");
                 LocalBroadcastManager.getInstance(
-                        getApplicationContext()
+                        GeolocationService.this
                 ).sendBroadcast(intent);
+                sendPosition(location);
             }
+
             @Override
             public void onLocationAvailability(LocationAvailability availability) {
                 if (!availability.isLocationAvailable() && BuildConfig.DEBUG) {
@@ -165,7 +212,19 @@ public class GeolocationService extends Service {
         };
 
         Logger.debug("BackgroundService.Geo", "created new request");
-        client.requestLocationUpdates(
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Logger.debug("BackgroundService.Geo", "Permissions not granted!");
+
+            // TODO: Consider calling
+            //    ActivityCompat#requestPermissions
+            // here to request the missing permissions, and then overriding
+            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            //                                          int[] grantResults)
+            // to handle the case where the user grants the permission. See the documentation
+            // for ActivityCompat#requestPermissions for more details.
+            return;
+        }
+        getClient().requestLocationUpdates(
                 locationRequest,
                 callback,
                 null
@@ -197,20 +256,51 @@ public class GeolocationService extends Service {
         return obj;
     }
 
+    /**
+     * Sends location updates from GeolocationService to Lagruva server
+     * via the Firebase MessagingService
+     *
+     * @param location
+     */
+    private void sendPosition(Location location) {
 
+        if (partnerId == null) {
+            Logger.debug("BackgroundService.Geo", "getting partner_id from default preferences");
+            partnerId = PreferenceManager.getDefaultSharedPreferences(this).getString("partner_id",null);
+            if (partnerId == null) {
+                Logger.warn("BackgroundService.Geo", "partnerId not set, ignoring position.");
+                return;
+            }
+        }
+        JSONObject position = new JSONObject();
+        try {
+            position.put("latitude", location.getLatitude());
+            position.put("longitude", location.getLongitude());
+            position.put("accuracy", location.getAccuracy());
+            position.put("partner_id", partnerId);
+            String args = "[" + position.toString() + "]";
+            Logger.info("BackgroundService.Geo", "sending position: " + args);
+            MessagingService.callMethod(this, "towing.pos", "create-nr", args, null);
+        } catch (Exception e) {
+            Logger.error("BackgroundService.Geo", "Error sending position", e);
+        }
+    }
 
-     // Handles requests from the activity.
     public class LocalBinder extends Binder {
         public void start() {
-            Logger.debug("BackgroundService.Geo", "[binder] to foreground");
+            Logger.debug("BackgroundService.Geo", "[binder] starting");
             GeolocationService.this.start();
         }
-         public void stop() {
-             GeolocationService.this.stop();
-         }
-         public boolean isStarted() {
+
+        public void stop() {
+            Logger.debug("BackgroundService.Geo", "[binder] stopping");
+            GeolocationService.this.stop();
+        }
+
+        public boolean isStarted() {
             return started;
-         }
-         public Context getContext() {return GeolocationService.this.getApplicationContext();}
-     }
+
+
+        }
+    }
 }

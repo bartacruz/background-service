@@ -3,8 +3,12 @@ package com.lagruva.backgroundservice;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Binder;
+import android.os.IBinder;
+import android.preference.PreferenceManager;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.getcapacitor.JSObject;
@@ -27,45 +31,17 @@ public class MessagingService extends FirebaseMessagingService {
     static final String ACTION_MESSAGE = (
             MessagingService.class.getPackage().getName() + ".message"
     );
-    public static Context context;
-    private static BackgroundService serviceInstance;
     private static String sessionKey;
     private static String defaultReceiver;
 
-    public static void start(Context context) {
-        MessagingService.context = context;
-        FirebaseMessaging.getInstance().setAutoInitEnabled(true);
-        /*FirebaseInstanceId
-                .getInstance()
-                .getInstanceId()
-                .addOnSuccessListener(
-                        context.getAc(),
-                        new OnSuccessListener<InstanceIdResult>() {
-                            @Override
-                            public void onSuccess(InstanceIdResult instanceIdResult) {
-                                Logger.debug("BackgroundService.Messaging","FCM Success. Token: " + instanceIdResult.getToken());
-                            }
-                        }
-                );
-        FirebaseInstanceId
-                .getInstance()
-                .getInstanceId()
-                .addOnFailureListener(
-                        new OnFailureListener() {
-                            public void onFailure(Exception e) {
-                                Logger.error("BackgroundService.Messaging","FCM Failure", e);
-                            }
-                        }
-                );*/
-        Logger.debug("BackgroundService.Messaging", "messagingService started and context set");
-    }
     @Override
     public void onCreate() {
         super.onCreate();
-        context = getApplicationContext();
-        serviceInstance = BackgroundService.getInstance();
-        Logger.debug("BackgroundService.Messaging", "messagingService context set");
+        Logger.debug("BackgroundService.Messaging", "onCreate");
+        FirebaseMessaging.getInstance().setAutoInitEnabled(true);
+
     }
+
     @Override
     public void onMessageReceived(@NonNull RemoteMessage remoteMessage) {
         Logger.debug("BackgroundService.Messaging","onMessageReceived: " + remoteMessage);
@@ -79,36 +55,41 @@ public class MessagingService extends FirebaseMessagingService {
                 JSONObject data = new JSONObject(remoteMessage.getData().get("data"));
                 sessionKey = data.getString("key");
                 defaultReceiver = remoteMessage.getSenderId();
-                Logger.debug("BackgroundService.Messaging", "login-ack session: " + sessionKey);
-                Logger.debug("BackgroundService.Messaging", "login-ack senderId: " + remoteMessage.getSenderId());
-                Logger.debug("BackgroundService.Messaging", "login-ack from: " + remoteMessage.getFrom());
+                String partner_id = data.getString("partner_id");
+                PreferenceManager.getDefaultSharedPreferences(this).edit()
+                        .putString("partner_id",partner_id)
+                        .putString("sessionKey",sessionKey)
+                        .putString("receiver",defaultReceiver + "@fcm.googleapis.com")
+                        .apply();
             } catch (JSONException e) {
                 Logger.error("BackgroundService.Messaging", "login-ack JSON error",e);
             }
         }
+        // TODO: agregar login-nack para borrar los datos.
+
         Intent intent = new Intent(ACTION_MESSAGE);
                 intent.putExtra("message", remoteMessage);
                 LocalBroadcastManager.getInstance(
                         getApplicationContext()
                 ).sendBroadcast(intent);
     }
+
     public void sendPong() {
         try {
             Logger.debug("BackgroundService.Messaging", "Sending pong");
-            sendMessage(null,"pong",null);
-            Logger.debug("BackgroundService.Messaging", "Service started? " + BackgroundService.started);
-
-            BackgroundService.checkService(null);
+            sendMessage(this,null,"pong",null);
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
-    public static void sendMessage(String receiver, String type, JSONObject data) {
+
+    public static void sendMessage(Context context, String receiver, String type, JSONObject data) {
         if (context == null) {
-            Logger.warn("BackgroundService.Messaging", "ignoring sendMessage, context is null: " + type + ", "+ data);
+            Logger.warn("BackgroundService.Messaging", "context is null. ignoring msg: " + data);
             return;
         }
-        SharedPreferences sharedPreferences = context.getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE);
+
+        SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
         if (receiver == null) {
             if (defaultReceiver != null) {
                 receiver = defaultReceiver + "@fcm.googleapis.com";
@@ -127,11 +108,15 @@ public class MessagingService extends FirebaseMessagingService {
                     .setMessageId(UUID.randomUUID().toString());
             builder.addData("type", type);
 
-            if (data == null || (!type.equals("login") && !data.has("key")))
+            if (!type.equals("login") && (data == null || !data.has("key") )) {
                 // Si no es un login y falta el dato del sessionKey, agrego el obtenido via login-ack
-                Logger.debug("BackgroundService.Messaging", "adding key: "+sessionKey);
+                if (sessionKey == null) {
+                    Logger.debug("BackgroundService.Messaging", "sessionKey is null getting from prefs");
+                    sessionKey = sharedPreferences.getString("sessionKey", null);
+                }
+                Logger.debug("BackgroundService.Messaging", "adding key for " + type + ": " + sessionKey);
                 builder.addData("key", sessionKey);
-                
+            }
             if (data != null) {
                 Iterator<String> keys = data.keys();
                 while (keys.hasNext()) {
@@ -141,12 +126,13 @@ public class MessagingService extends FirebaseMessagingService {
                 }
             }
             RemoteMessage message = builder.build();
+            Logger.debug("BackgroundService.Messaging", "sending: "+message);
             FirebaseMessaging.getInstance().send(message);
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
-    public static void callMethod(String model, String method, String args, String kwargs) {
+    public static void callMethod(Context context, String model, String method, String args, String kwargs) {
         JSONObject data = new JSONObject();
         try {
             data.put("model", model);
@@ -155,7 +141,7 @@ public class MessagingService extends FirebaseMessagingService {
                 data.put("args", args);
             }
 
-            sendMessage(null,"rpc", data);
+            sendMessage(context,null,"rpc", data);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -165,5 +151,14 @@ public class MessagingService extends FirebaseMessagingService {
     public void onNewToken(@NonNull String s) {
         super.onNewToken(s);
         // PushNotificationsPlugin.onNewToken(s);
+    }
+    // Handles requests from the activity.
+    public class LocalBinder extends Binder {
+        public void callMethod(Context context, String model, String method, String args, String kwargs) {
+            MessagingService.this.callMethod(context, model,method,args,kwargs);
+        }
+        public void sendMessage(Context context, String receiver, String type, JSONObject data) {
+            MessagingService.this.sendMessage(context, receiver,type,data);
+        }
     }
 }

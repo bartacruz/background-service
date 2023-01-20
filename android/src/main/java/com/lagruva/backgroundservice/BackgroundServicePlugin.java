@@ -1,19 +1,8 @@
 package com.lagruva.backgroundservice;
+
 import android.Manifest;
-
-import com.getcapacitor.JSObject;
-import com.getcapacitor.PermissionState;
-import com.getcapacitor.Plugin;
-import com.getcapacitor.PluginCall;
-import com.getcapacitor.PluginMethod;
-import com.getcapacitor.NativePlugin;
-import com.getcapacitor.annotation.CapacitorPlugin;
-import com.getcapacitor.annotation.Permission;
-import com.getcapacitor.annotation.PermissionCallback;
-
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -24,14 +13,19 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 
+import androidx.core.content.ContextCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
+import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
+import com.getcapacitor.PermissionState;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import com.getcapacitor.plugin.util.AssetUtil;
-import com.google.android.gms.tasks.OnFailureListener;
-import com.google.android.gms.tasks.OnSuccessListener;
-import com.google.firebase.iid.FirebaseInstanceId;
-import com.google.firebase.iid.InstanceIdResult;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.RemoteMessage;
 
@@ -50,29 +44,24 @@ import java.util.Map;
     @Permission(strings = { Manifest.permission.ACCESS_BACKGROUND_LOCATION}, alias = BackgroundServicePlugin.BACKGROUND_LOCATION),
     @Permission(strings = { Manifest.permission.FOREGROUND_SERVICE}, alias = BackgroundServicePlugin.FOREGROUND_SERVICE),}
     )
+
 public class BackgroundServicePlugin extends Plugin implements IBroadCastListener {
     static final String LOCATION = "location";
     static final String COARSE_LOCATION = "coarseLocation";
     static final String BACKGROUND_LOCATION = "backgroundLocation";
     static final String FOREGROUND_SERVICE = "foregroundService";
     private Boolean stoppedWithoutPermissions = false;
-    private BackgroundService implementation;
-//    public MessagingService firebaseMessagingService;
-    protected GeolocationService.LocalBinder testService = null;
+    protected GeolocationService.LocalBinder locationService = null;
+    private ServiceConnection locationConnection;
     private ServiceReceiver receiver = null;
-
     public static Boolean started;
 
     public void load() {
-        Logger.debug("BackgroundService","started? " + BackgroundServicePlugin.started);
+        Logger.debug("BackgroundService.Plugin","started? " + BackgroundServicePlugin.started);
+        FirebaseMessaging.getInstance().setAutoInitEnabled(true);
         int resId = AssetUtil.getResourceID(getActivity().getApplicationContext(),"notifiacion_lagruva","drawable");
-        bindReceiver(getContext());
-        implementation = BackgroundService.getInstance();
-        implementation.init(getActivity().getApplicationContext());
-        MessagingService.start(getActivity().getApplicationContext());
-
-        Logger.debug("BackgroundService","loaded");
-
+        bindReceiver();
+        bindLocationService();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = (NotificationManager) getContext().getSystemService(
                     Context.NOTIFICATION_SERVICE
@@ -88,31 +77,6 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
             channel.setDescription("Lagruva Desc");
             manager.createNotificationChannel(channel);
         }
-        boolean result = getContext().bindService(
-                new Intent(getContext(), GeolocationService.class),
-                new ServiceConnection() {
-                    @Override
-                    public void onServiceConnected(ComponentName name, IBinder binder) {
-                        Logger.debug("BackgroundService", "GeolocationService binder set: " + name);
-                        testService = (GeolocationService.LocalBinder) binder;
-                        Logger.debug("BackgroundService", "my context : " + getContext());
-                        Logger.debug("BackgroundService", "geo context: " + GeolocationService.context);
-                    }
-
-                    @Override
-                    public void onServiceDisconnected(ComponentName name) {
-                        Logger.debug("BackgroundService", "serviceDisconnected: " + name);
-                    }
-
-                    @Override
-                    public void onNullBinding(ComponentName name) {
-                        ServiceConnection.super.onNullBinding(name);
-                        Logger.debug("BackgroundService", "nullBinding: " + name);
-                    }
-                },
-                Context.BIND_AUTO_CREATE
-        );
-
     }
 
     @PluginMethod
@@ -127,80 +91,91 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
             requestPermissionForAlias(alias, call, "completeCurrentPosition");
         }
         started = true;
-        Logger.debug("BackgroundService","plugin started");
-        BackgroundService.start();
+        Logger.debug("BackgroundService.Plugin","location tracking started");
+        Intent serviceIntent = new Intent(getContext(), GeolocationService.class);
+        serviceIntent.putExtra("action", "start");
+        ContextCompat.startForegroundService(getContext(), serviceIntent);
+        Logger.debug("BackgroundService.Plugin","loaded");
     }
     @PluginMethod
     public void stop(PluginCall call) {
         started = false;
-        Logger.debug("BackgroundService","plugin stopped");
-        BackgroundService.stop();
+//        Intent serviceIntent = new Intent(getContext(), GeolocationService.class);
+//        serviceIntent.putExtra("action", "stop");
+//        getContext().stopService(serviceIntent);
+        locationService.stop();
+        Logger.debug("BackgroundService.Plugin","location tracking stopped");
+        
     }
+//    @PluginMethod
+//    public void isStarted(PluginCall call) {
+//
+//        call.resolve(JSObject.);
+//    }
 
     @PluginMethod()
     public void sendMessage(final PluginCall call) {
       try {
-
         JSONObject data = call.getObject("data");
         if (!data.has("type")) {
-            Logger.warn("BackgroundService","sendMessage - message has no type: "+ data);
+            Logger.warn("BackgroundService.Plugin","sendMessage - message has no type: "+ data);
             call.reject("Message has no type");
             return;
         }
         String receiver = call.getString("receiver");
         String type = data.remove("type").toString();
-        MessagingService.sendMessage(receiver, type,data);
+        MessagingService.sendMessage(getContext(),receiver, type,data);
         call.resolve(JSObject.fromJSONObject(data));
       } catch (Exception e) {
         e.printStackTrace();
-        call.reject("Error sending message", e);
+        call.reject("BackgroundService.Plugin Error sending message", e);
       }
     }
 
     /**
      * Completes the getCurrentPosition plugin call after a permission request
-     * @see #getCurrentPosition(PluginCall)
+     * @see #start(PluginCall)
      * @param call the plugin call
      */
     @PermissionCallback
     private void completeCurrentPosition(PluginCall call) {
         if (getPermissionState(BackgroundServicePlugin.COARSE_LOCATION) == PermissionState.GRANTED) {
-            Logger.debug("BacgroundService","Permissions granted");
+            Logger.debug("BackgroundService","Permissions granted");
             call.resolve();
         } else {
             call.reject("Location permission was denied");
         }
     }
 
-    public void bindReceiver(Context context) {
+    public void bindReceiver() {
         if (receiver == null) {
-            Logger.debug("BackgroundService", "creating service receiver.");
+            Logger.debug("BackgroundService.Plugin", "creating service receiver.");
             receiver = new ServiceReceiver(this);
             IntentFilter filter = new IntentFilter();
             filter.addAction(GeolocationService.ACTION_LOCATION);
             filter.addAction(MessagingService.ACTION_MESSAGE);
-            LocalBroadcastManager.getInstance(context).registerReceiver(
+            LocalBroadcastManager.getInstance(getContext()).registerReceiver(
                     receiver,
                     filter
             );
 
-            Logger.debug("BackgroundService", "plugin receiver binded.");
+            Logger.debug("BackgroundService.Plugin", "ServiceReceiver binded.");
         } else {
-            Logger.debug("BackgroundService", "plugin service receiver already set.");
+            Logger.debug("BackgroundService.Plugin", "ServiceReceiver already set.");
         }
 
     }
 
     public void broadcastReceived(Intent intent) {
-        Logger.debug("BackgroundService", "plugin broadcastReceived: " + intent.getAction());
+        Logger.debug("BackgroundService.Plugin", "plugin broadcastReceived: " + intent.getAction());
         if (intent.getAction().equals(GeolocationService.ACTION_LOCATION)) {
             Location location = intent.getParcelableExtra("location");
-            Logger.debug("BackgroundService", "broadcast location received: " + location);
+            Logger.debug("BackgroundService.Plugin", "broadcast location received: " + location);
             fireLocation(location);
 
         } else if (intent.getAction().equals(MessagingService.ACTION_MESSAGE)) {
             RemoteMessage message = intent.getParcelableExtra("message");
-            Logger.debug("BackgroundService", "plugin broadcast FCM received: " + message);
+            Logger.debug("BackgroundService.Plugin", "plugin broadcast FCM received: " + message);
             fireNotification(message);
         }
     }
@@ -208,12 +183,12 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
     public void fireLocation(Location location) {
         Logger.debug("BackgroundService.Plugin","fireLocation "+location);
         JSObject remoteMessageData = getJSObjectForLocation(location);
-        Logger.debug("BackgroundService","firing location "+remoteMessageData);
+        Logger.debug("BackgroundService.Plugin","firing location "+remoteMessageData);
         notifyListeners("positionReceived", remoteMessageData, true);
     }
 
     public void fireNotification(RemoteMessage remoteMessage) {
-        Logger.debug("BackgroundService","fire "+remoteMessage);
+        Logger.debug("BackgroundService.Plugin","fire "+remoteMessage);
         JSObject remoteMessageData = new JSObject();
 
         JSObject data = new JSObject();
@@ -223,7 +198,7 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
             data.put(key, value);
         }
         remoteMessageData.put("data", data);
-        Logger.debug("BackgroundService","fire data"+data);
+        Logger.debug("BackgroundService.Plugin","fire data"+data);
 
         RemoteMessage.Notification notification = remoteMessage.getNotification();
         if (notification != null) {
@@ -236,11 +211,11 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
                 remoteMessageData.put("link", link.toString());
             }
         }
-        Logger.debug("BackgroundService","firing "+remoteMessageData);
+        Logger.debug("BackgroundService.Plugin","firing "+remoteMessageData);
         notifyListeners("pushNotificationReceived", remoteMessageData, true);
     }
 
-    private JSObject getJSObjectForLocation(Location location) {
+    private static JSObject getJSObjectForLocation(Location location) {
         JSObject ret = new JSObject();
         JSObject coords = new JSObject();
         ret.put("coords", coords);
@@ -257,25 +232,58 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
         return ret;
     }
 
+    private void bindLocationService() {
+        this.locationConnection = new ServiceConnection() {
+            @Override
+            public void onServiceConnected(ComponentName name, IBinder binder) {
+                Logger.debug("BackgroundService.plugin", "GeolocationService binder set: " + name);
+                locationService = (GeolocationService.LocalBinder) binder;
+            }
+            @Override
+            public void onServiceDisconnected(ComponentName name) {
+                Logger.debug("BackgroundService.plugin", "Geolocation serviceDisconnected: " + name);
+            }
+            @Override
+            public void onNullBinding(ComponentName name) {
+                ServiceConnection.super.onNullBinding(name);
+                Logger.debug("BackgroundService.plugin", "nullBinding: " + name);
+            }
+        };
+
+        getContext().bindService(
+                new Intent(getContext(), GeolocationService.class),
+                locationConnection,
+                Context.BIND_AUTO_CREATE
+        );
+        Logger.debug("BackgroundService.plugin", "locationService bind called: ");
+    }
+
     @Override
     protected void handleOnResume() {
-        Logger.debug("BackgroundService","handleOnResume");
+        Logger.debug("BackgroundService.Plugin","handleOnResume");
         super.handleOnResume();
     }
 
     @Override
     protected void handleOnPause() {
-        Logger.debug("BackgroundService","handleOnPause");
+        Logger.debug("BackgroundService.Plugin","handleOnPause");
         stoppedWithoutPermissions = !hasRequiredPermissions();
         super.handleOnPause();
     }
 
     @Override
     protected void handleOnDestroy() {
-        Logger.debug("BackgroundService","handleOnDestroy");
-        if (BackgroundServicePlugin.started) {
-            BackgroundService.stop();
-            BackgroundService.start();
+        Logger.debug("BackgroundService.Plugin","handleOnDestroy");
+
+        if (locationConnection != null) {
+            if (locationService.isStarted()) {
+                Logger.debug("BackgroundService.Plugin","grolocationService is started. trying to keep it that way");
+                Intent serviceIntent = new Intent(getContext(), GeolocationService.class);
+                serviceIntent.putExtra("action", "start");
+                ContextCompat.startForegroundService(getContext(), serviceIntent);
+            }
+            Logger.debug("BackgroundService.Plugin","unbinding locationConnection");
+            getContext().unbindService(locationConnection);
         }
 
         super.handleOnDestroy();
