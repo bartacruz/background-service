@@ -12,6 +12,7 @@ import android.location.Location;
 import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
+import android.provider.Settings;
 
 import androidx.core.content.ContextCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
@@ -83,13 +84,32 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
     public void start(PluginCall call) {
         Map<String, PermissionState> permissionsResult = getPermissionStates();
         for (Map.Entry<String, PermissionState> entry : permissionsResult.entrySet()) {
-            Logger.debug("Permission "+entry.getKey()+": "+entry.getValue());
+            Logger.debug("Permission " + entry.getKey() + ": " + entry.getValue());
 
         }
-        String alias = COARSE_LOCATION;
-        if (getPermissionState(alias) != PermissionState.GRANTED) {
-            requestPermissionForAlias(alias, call, "completeCurrentPosition");
-        }
+//        Logger.debug("BackgroundService.Plugin", "Cheching permissions");
+//        String alias = BACKGROUND_LOCATION;
+//        requestAllPermissions(call, "completeCurrentPosition");
+//        requestPermissionForAlias(alias, call, "completeCurrentPosition");
+//        String alias = BACKGROUND_LOCATION;
+//        if (getPermissionState(alias) != PermissionState.GRANTED) {
+//            openSettings();
+//            call.reject("No hay permisos");
+//        }
+//            Logger.debug("BackgroundService.Plugin", "Asking permissions");
+//            requestPermissionForAlias(alias, call, "completeCurrentPosition");
+//        }
+//        Logger.debug("BackgroundService.Plugin", "request all permissions called");
+        realStart();
+    }
+    public void openSettings() {
+        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        Uri uri = Uri.fromParts("package", getContext().getPackageName(), null);
+        intent.setData(uri);
+        getContext().startActivity(intent);
+
+    }
+    private void realStart() {
         started = true;
         Logger.debug("BackgroundService.Plugin","location tracking started");
         Intent serviceIntent = new Intent(getContext(), GeolocationService.class);
@@ -139,11 +159,12 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
      */
     @PermissionCallback
     private void completeCurrentPosition(PluginCall call) {
-        if (getPermissionState(BackgroundServicePlugin.COARSE_LOCATION) == PermissionState.GRANTED) {
-            Logger.debug("BackgroundService","Permissions granted");
+        if (getPermissionState(BackgroundServicePlugin.BACKGROUND_LOCATION) == PermissionState.GRANTED) {
+            Logger.debug("BackgroundService","complete: Permissions granted");
+            realStart();
             call.resolve();
         } else {
-            call.reject("Location permission was denied");
+            call.reject("BackgroundService","complete: Location permission was denied");
         }
     }
 
