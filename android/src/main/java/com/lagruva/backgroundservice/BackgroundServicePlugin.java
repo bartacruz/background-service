@@ -38,18 +38,16 @@ import java.util.Map;
 @CapacitorPlugin(name = "BackgroundService", permissions = {
     @Permission(strings = {}, alias = "receive"),
     @Permission(
-            strings = { Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_BACKGROUND_LOCATION },
+            strings = { Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION },
             alias = BackgroundServicePlugin.LOCATION
     ),
     @Permission(strings = { Manifest.permission.ACCESS_COARSE_LOCATION }, alias = BackgroundServicePlugin.COARSE_LOCATION),
-    @Permission(strings = { Manifest.permission.ACCESS_BACKGROUND_LOCATION}, alias = BackgroundServicePlugin.BACKGROUND_LOCATION),
-    @Permission(strings = { Manifest.permission.FOREGROUND_SERVICE}, alias = BackgroundServicePlugin.FOREGROUND_SERVICE),}
+    }
     )
 
 public class BackgroundServicePlugin extends Plugin implements IBroadCastListener {
     static final String LOCATION = "location";
     static final String COARSE_LOCATION = "coarseLocation";
-    static final String BACKGROUND_LOCATION = "backgroundLocation";
     static final String FOREGROUND_SERVICE = "foregroundService";
     private Boolean stoppedWithoutPermissions = false;
     protected GeolocationService.LocalBinder locationService = null;
@@ -159,7 +157,7 @@ public class BackgroundServicePlugin extends Plugin implements IBroadCastListene
      */
     @PermissionCallback
     private void completeCurrentPosition(PluginCall call) {
-        if (getPermissionState(BackgroundServicePlugin.BACKGROUND_LOCATION) == PermissionState.GRANTED) {
+        if (getPermissionState(BackgroundServicePlugin.LOCATION) == PermissionState.GRANTED) {
             Logger.debug("BackgroundService","complete: Permissions granted");
             realStart();
             call.resolve();
